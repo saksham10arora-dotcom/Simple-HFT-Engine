@@ -1,0 +1,17 @@
+# Build output
+build/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+
+# IDE files
+.vs/
+.vscode/
+*.vcxproj.user
+CMakeUserPresets.json
+
+# OS files
+Thumbs.db
+.DS_Store
