@@ -2,7 +2,7 @@
 
 A limit order book matching engine I built in C++ to learn how real exchanges work under the hood.
 
-The idea was simple: take the core data structure of every exchange (the order book) and figure out how to make it fast. Not "fast for a student project" fast — actually fast, in terms of cache behavior and zero-allocation hot paths.
+The idea was simple: take the core data structure of every exchange (the order book) and figure out how to make it fast. Not "fast for a student project" fast, but actually fast in terms of cache behavior and zero-allocation hot paths.
 
 ## What it does
 
@@ -12,9 +12,40 @@ The idea was simple: take the core data structure of every exchange (the order b
 - Cancel and modify in O(1)
 - Reports trades via zero-allocation callback
 
+## Architecture
+
+```
+                   ┌─────────────────────────────────────┐
+                   │         OrderBook (v3.0)             │
+                   │                                      │
+  submitOrder() ──▶│  Flat Array of PriceLevel structs    │
+                   │  [9000] [9001] ... [10000] ... [11000]│
+                   │     │                  │              │
+                   │     ▼                  ▼              │
+                   │  PriceLevel         PriceLevel        │
+                   │  ┌─────┐            ┌─────┐          │
+                   │  │ O←→O│            │O←→O←→O│        │
+                   │  └─────┘            └───────┘        │
+                   │  (intrusive         (intrusive        │
+                   │   linked list)       linked list)     │
+                   │                                      │
+                   │  best_bid_ ──────▶ O(1) BBO          │
+                   │  best_ask_ ──────▶ O(1) BBO          │
+                   │                                      │
+  on_trade(T) ◀───│  Zero-alloc callback template        │
+                   └─────────────────────────────────────┘
+                              ▲
+                              │
+                   ┌──────────┴──────────┐
+                   │  MemoryPool<Order>   │
+                   │  Raw storage arena   │
+                   │  + free-list recycle │
+                   └─────────────────────┘
+```
+
 ## How it evolved
 
-This project went through a few rewrites. The first version used `std::map` for price levels and `std::deque` for order queues. It worked, but the performance was mediocre and the benchmark was honestly kind of fake — it was timing an empty loop, not real matching.
+This project went through a few rewrites. The first version used `std::map` for price levels and `std::deque` for order queues. It worked, but the performance was mediocre and the benchmark was honestly kind of fake. It was timing an empty loop, not real matching.
 
 v3 (current) is a full rewrite:
 
@@ -80,25 +111,25 @@ Numbers from `bench_compare.exe` on my machine (2M orders, same seed, Release mo
 | Array + Deque | 1.36M/s | 500ns | 2200ns | 24μs |
 | Array + Intrusive | 2.57M/s | 300ns | 900ns | 3.4μs |
 
-The big takeaway wasn't the absolute numbers (which depend on hardware), but the relative improvement and especially the tail latency. p999 going from 45μs to 3.4μs was the most satisfying part — that's a 13x reduction in worst-case latency.
+The big takeaway wasn't the absolute numbers (which depend on hardware), but the relative improvement and especially the tail latency. p999 going from 45μs to 3.4μs was the most satisfying part: a 13x reduction in worst-case latency.
 
 ## Key design decisions
 
-**Integer ticks instead of floats.** My first version used `double` for prices. Then I hit the classic `0.1 + 0.2 != 0.3` problem during matching. Switched to integer ticks — every real exchange does this for a reason.
+**Integer ticks instead of floats.** My first version used `double` for prices. Then I hit the classic `0.1 + 0.2 != 0.3` problem during matching. Switched to integer ticks. Every real exchange does this for a reason.
 
 **Flat array instead of tree.** `std::map` gives you O(log n) lookup but every node is at a random memory address. A flat array gives O(1) and the price levels sit next to each other in memory, so the CPU prefetcher actually helps you. The tradeoff is wasted memory for empty levels, but with a reasonable tick range it's fine.
 
-**Intrusive linked lists.** This was the change that made the biggest difference. With `std::deque`, cancelling an order means scanning the whole queue to find it — O(n). With intrusive lists, each order carries its own prev/next pointers, so removal is just pointer rewiring — O(1). The downside is +16 bytes per order, but we still fit in a cache line.
+**Intrusive linked lists.** This was the change that made the biggest difference. With `std::deque`, cancelling an order means scanning the whole queue to find it, which is O(n). With intrusive lists, each order carries its own prev/next pointers, so removal is just pointer rewiring. O(1). The downside is +16 bytes per order, but we still fit in a cache line.
 
 **Callback template for trade output.** Instead of building a `vector<Trade>` on every match call (which means malloc on the hot path), matching takes a callback and calls it for each trade. The compiler inlines the lambda, so in the benchmark case `[](const Trade&) {}` literally compiles to nothing.
 
 ## Lessons learned
 
-1. **Measure before optimizing.** My v1 "benchmark" was timing an empty loop. I was proud of 2 billion TPS until I realized no actual matching was happening. Embarrassing, but a good lesson — always measure what matters.
+1. **Measure before optimizing.** My v1 "benchmark" was timing an empty loop. I was proud of 2 billion TPS until I realized no actual matching was happening. Embarrassing, but a good lesson. Always measure what matters.
 
 2. **Cache effects dominate algorithmic complexity.** O(1) vs O(log n) matters less than you'd think when n is small. The real win from flat arrays was cache locality, not algorithmic complexity. I only understood this after reading "What Every Programmer Should Know About Memory" by Ulrich Drepper.
 
-3. **The hot path is everything.** In HFT, you optimize the path that runs millions of times per second. Everything else (startup, shutdown, config) can be slow. This mindset changed how I structured the code — the matching loop touches nothing except the order book arrays and the intrusive list.
+3. **The hot path is everything.** In HFT, you optimize the path that runs millions of times per second. Everything else (startup, shutdown, config) can be slow. This mindset changed how I structured the code. The matching loop touches nothing except the order book arrays and the intrusive list.
 
 4. **Don't mix concerns in data structures.** My v1 Order struct had both application data (price, quantity) and container data (position in a vector). Intrusive lists let the Order carry its own list membership, which is cleaner and faster.
 
