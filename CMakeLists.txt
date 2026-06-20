@@ -17,6 +17,9 @@ endif()
 # Header search path
 include_directories(include)
 
+# Threads for the multithreaded engine + SPSC concurrency test
+find_package(Threads REQUIRED)
+
 # ── Targets ─────────────────────────────────────────────────────
 
 # Main engine demo
@@ -31,3 +34,11 @@ add_executable(benchmark tests/benchmark.cpp)
 # Research: 3-architecture comparison benchmark
 add_executable(bench_compare research/benchmark_comparison.cpp)
 target_include_directories(bench_compare PRIVATE research)
+
+# Multithreaded engine: feed thread + matching thread over a lock-free SPSC ring
+add_executable(threaded_engine src/threaded_engine.cpp)
+target_link_libraries(threaded_engine PRIVATE Threads::Threads)
+
+# SPSC ring concurrency correctness test
+add_executable(test_spsc tests/test_spsc.cpp)
+target_link_libraries(test_spsc PRIVATE Threads::Threads)
