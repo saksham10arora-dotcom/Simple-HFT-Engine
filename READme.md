@@ -151,3 +151,7 @@ The big takeaway wasn't the absolute numbers (which depend on hardware), but the
 - CMake
 - No external dependencies
 - Tested on MSVC 17.x (Windows 11)
+
+---
+
+Built by [Saksham Arora](https://saksham.digital) · [saksham.digital](https://saksham.digital)
